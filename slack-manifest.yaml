@@ -1,0 +1,23 @@
+_metadata:
+  major_version: 1
+  minor_version: 1
+display_information:
+  name: Slack2GTask
+features:
+  bot_user:
+    display_name: Slack2GTask
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+    user:
+      - stars:read
+settings:
+  event_subscriptions:
+    user_events:
+      - star_added
+  socket_mode_enabled: true

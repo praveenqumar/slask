@@ -1,0 +1,30 @@
+{
+  "name": "slack-gtask-agent",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@slack/bolt": "^3.21.0",
+    "dotenv": "^16.3.1",
+    "googleapis": "^126.0.0",
+    "open": "^11.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nock": "^13.5.6"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:debug": "LOG_LEVEL=DEBUG node index.js"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coverageDirectory": "coverage",
+    "collectCoverageFrom": [
+      "index.js",
+      "lib/**/*.js"
+    ]
+  }
+}
