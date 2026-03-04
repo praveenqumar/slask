@@ -21,9 +21,10 @@ const TRIGGER_EMOJI = process.env.TRIGGER_EMOJI || 'white_check_mark';
 const app = new App({
     token: process.env.SLACK_BOT_TOKEN,
     signingSecret: process.env.SLACK_SIGNING_SECRET,
-    socketMode: true,
-    appToken: process.env.SLACK_APP_TOKEN,
     userToken: process.env.SLACK_USER_TOKEN,
+    // Vercel: HTTP mode (webhooks) instead of Socket Mode
+    // socketMode: true,
+    // appToken: process.env.SLACK_APP_TOKEN,
 });
 
 // --- Message Processing Functions ---
@@ -180,6 +181,17 @@ module.exports = {
     verifyTaskCreated,
     tasks
 };
+
+// --- Vercel serverless handler ---
+// Export for Vercel deployment (HTTP event delivery)
+if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    // Vercel serverless function handler
+    // The app will handle incoming HTTP requests from Slack
+    module.exports = async (req, res) => {
+        // The Bolt app's built-in handler will process the request
+        await app.handler(req, res);
+    };
+}
 
 // --- Start App only if running directly (not in tests) ---
 if (require.main === module) {
