@@ -22,5 +22,3 @@ settings:
     user_events:
       - star_added
   socket_mode_enabled: false
-  interactivity:
-    is_enabled: true
