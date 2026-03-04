@@ -18,6 +18,7 @@ oauth_config:
       - stars:read
 settings:
   event_subscriptions:
+    request_url: https://slask.vercel.app/api/slack/events
     user_events:
       - star_added
-  socket_mode_enabled: true
+  socket_mode_enabled: false
