@@ -63,3 +63,5 @@ install.sh
 # Internal debugging notes
 DEBUGGING.md
 CLAUDE.md
+.vercel
+.env*.local

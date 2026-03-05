@@ -123,15 +123,21 @@ function createHandler(taskEnricher) {
         return;
       }
 
-      // star_added message events — respond immediately, process in background
+      // star_added message events — enrich first, then respond
+      // NOTE: On Vercel serverless, background tasks are killed when response is sent.
+      // We must await enrichment before responding.
       if (event && event.type === 'star_added' && event.item && event.item.type === 'message') {
-        console.log('[WEBHOOK] star_added message event detected — responding 200, enriching in background');
+        console.log('[WEBHOOK] star_added message event detected — enriching synchronously');
         console.log('[WEBHOOK] Event item:', JSON.stringify(event.item, null, 2));
-        sendJson(res, 200, { ok: true });
-        taskEnricher.enrich(event).catch((err) => {
+        try {
+          await taskEnricher.enrich(event);
+          console.log('[WEBHOOK] Enrichment complete');
+        } catch (err) {
           Sentry.captureException(err);
-          console.error('[ERROR] Background enrichment failed:', err.message);
-        });
+          console.error('[ERROR] Enrichment failed:', err.message);
+          // Still return 200 so Slack doesn't retry
+        }
+        sendJson(res, 200, { ok: true });
         return;
       }
 
