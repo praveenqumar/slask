@@ -1,205 +1,169 @@
+'use strict';
+
 require('dotenv').config();
-const { App } = require('@slack/bolt');
-const { google } = require('googleapis');
-const { debug, info, error, section } = require('./lib/logger');
+const crypto = require('crypto');
+const Sentry = require('./lib/sentry');
+const Task_Enricher = require('./lib/task-enricher');
 
-// --- Google Tasks Client ---
-section('INITIALIZING GOOGLE TASKS CLIENT');
-debug('Google Client ID', process.env.GOOGLE_CLIENT_ID);
-debug('Google Refresh Token exists', !!process.env.GOOGLE_REFRESH_TOKEN);
-
-const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET
-);
-oauth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
-const tasks = google.tasks({ version: 'v1', auth: oauth2Client });
-
-// --- Slack App (Socket Mode) ---
-const TRIGGER_EMOJI = process.env.TRIGGER_EMOJI || 'white_check_mark';
-
-const app = new App({
-    token: process.env.SLACK_BOT_TOKEN,
-    signingSecret: process.env.SLACK_SIGNING_SECRET,
-    userToken: process.env.SLACK_USER_TOKEN,
-    // Vercel: HTTP mode (webhooks) instead of Socket Mode
-    // socketMode: true,
-    // appToken: process.env.SLACK_APP_TOKEN,
-});
-
-// --- Message Processing Functions ---
+// --- Legacy helpers (kept for backward compatibility with existing tests) ---
 function extractMessageData(event) {
-    const channel = event.item.channel;
-    const ts = event.item.message?.ts || event.item.ts;
-    const messageText = event.item.message?.text || 'Task from Slack';
-
-    return { channel, ts, messageText };
+  const channel = event.item.channel;
+  const ts = event.item.message?.ts || event.item.ts;
+  const messageText = event.item.message?.text || 'Task from Slack';
+  return { channel, ts, messageText };
 }
 
 function generateTaskTitle(messageText) {
-    return messageText.slice(0, 100);
+  return messageText.slice(0, 100);
 }
 
 function generateMessageLink(channel, ts) {
-    return `https://slack.com/archives/${channel}/p${ts.replace('.', '')}`;
+  return `https://slack.com/archives/${channel}/p${ts.replace('.', '')}`;
 }
 
-// --- Verification: Read task back by ID ---
-async function verifyTaskCreated(taskId) {
-    section('VERIFYING TASK CREATION');
+// --- Startup env var check ---
+const REQUIRED_ENV_VARS = [
+  'SLACK_SIGNING_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_REFRESH_TOKEN',
+  'LLM_API_KEY',
+];
+for (const v of REQUIRED_ENV_VARS) {
+  if (!process.env[v]) {
+    console.warn(`[WARN] Missing required environment variable: ${v}`);
+  }
+}
+
+// --- Slack signature verification ---
+function verifySlackSignature(rawBody, headers, signingSecret) {
+  const timestamp = headers['x-slack-request-timestamp'];
+  const slackSig = headers['x-slack-signature'];
+  if (!timestamp || !slackSig) return false;
+
+  const sigBase = `v0:${timestamp}:${rawBody.toString()}`;
+  const computed = `v0=${crypto
+    .createHmac('sha256', signingSecret)
+    .update(sigBase)
+    .digest('hex')}`;
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(slackSig));
+  } catch {
+    return false;
+  }
+}
+
+// --- Response helper (works with raw Node http AND Express/Vercel) ---
+function sendJson(res, statusCode, body) {
+  const payload = JSON.stringify(body);
+  if (typeof res.status === 'function') {
+    // Express / Vercel style
+    res.status(statusCode).json(body);
+  } else {
+    // Raw Node http.ServerResponse
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(payload);
+  }
+}
+
+// --- Handler factory ---
+function createHandler(taskEnricher) {
+  return async function handler(req, res) {
+    console.log(`[WEBHOOK] Incoming request: ${req.method} ${req.url}`);
     try {
-        debug('Fetching task with ID', { taskId });
-        const response = await tasks.tasks.get({
-            tasklist: '@default',
-            task: taskId,
-        });
-        info('✅ Task verified in Google Tasks', {
-            id: response.data.id,
-            title: response.data.title,
-            notes: response.data.notes,
-            status: response.data.status,
-            updated: response.data.updated
-        });
-        return response.data;
-    } catch (err) {
-        error('❌ Failed to verify task', { error: err.message, taskId });
-        return null;
-    }
-}
+      // Collect raw body
+      const rawBody = await new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on('data', (chunk) => chunks.push(chunk));
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+      });
+      console.log(`[WEBHOOK] Raw body (${rawBody.length} bytes):`, rawBody.toString().slice(0, 300));
 
-// --- Catch-all Event Listener for Debugging ---
-app.use(async ({ payload, context, next }) => {
-    if (payload && payload.type) {
-        console.log(`📨 [ALL EVENTS] Received: ${payload.type}`);
-        if (process.env.LOG_LEVEL === 'DEBUG') {
-            console.log(`   Payload:`, JSON.stringify(payload, null, 2));
-        }
-    }
-    await next();
-});
-
-// --- Main Event Handler ---
-app.event('star_added', async ({ event, client }) => {
-    section('STAR_ADDED EVENT RECEIVED');
-
-    // 1. Log event receipt
-    debug('Full star_added event', { event });
-
-    // Only handle starred messages
-    if (event.item.type !== 'message') {
-        debug('Skipping non-message star', { type: event.item.type });
+      // Parse JSON body
+      let body;
+      try {
+        body = JSON.parse(rawBody.toString());
+      } catch {
+        console.error('[WEBHOOK] Failed to parse JSON body');
+        sendJson(res, 400, { error: 'Invalid JSON' });
         return;
-    }
+      }
 
-    // Extract message data
-    const { channel, ts, messageText } = extractMessageData(event);
-    const messageSender = event.item.message?.user || event.item.message?.bot_id || 'unknown';
-    const starrer = event.user;
-
-    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('⭐ MESSAGE STARRED (SAVE LATER)');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`📝 Message Content: ${messageText}`);
-    console.log(`👤 Original Sender: ${messageSender}`);
-    console.log(`⭐ Starred By: ${starrer}`);
-    console.log(`🕐 Timestamp: ${ts}`);
-    console.log(`📢 Channel: ${channel}`);
-    console.log(`🔗 Slack Message Link: https://slack.com/archives/${channel}/p${ts.replace('.', '')}`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
-    info('Message starred', {
-        user: starrer,
-        messageSender,
-        channel,
-        ts
-    });
-
-    try {
-        // 2. Extract message data
-        debug('Extracted message data', { channel, ts, messageText });
-
-        // 3. Generate task components
-        const taskTitle = generateTaskTitle(messageText);
-        const messageLink = generateMessageLink(channel, ts);
-        info('Task components prepared', {
-            title: taskTitle,
-            link: messageLink
-        });
-
-        // 4. Create Google Task
-        section('CREATING GOOGLE TASK');
-        const createResponse = await tasks.tasks.insert({
-            tasklist: '@default',
-            requestBody: {
-                title: taskTitle,
-                notes: `📎 Slack message: ${messageLink}`,
-            },
-        });
-
-        const createdTask = createResponse.data;
-        info('✅ Task created', {
-            id: createdTask.id,
-            title: createdTask.title,
-            notes: createdTask.notes,
-            position: createdTask.position
-        });
-
-        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ GOOGLE TASK CREATED SUCCESSFULLY');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log(`📋 Task ID: ${createdTask.id}`);
-        console.log(`📌 Task Title: ${createdTask.title}`);
-        console.log(`📎 Notes: ${createdTask.notes}`);
-        console.log(`🔗 Google Task Link: https://tasks.google.com/task/${createdTask.id}`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
-        // 5. Verify task by reading it back
-        const verifiedTask = await verifyTaskCreated(createdTask.id);
-
-        if (verifiedTask) {
-            section('TASK CREATION SUCCESS');
-            info('Full task available at Google Tasks', {
-                id: verifiedTask.id,
-                selfLink: `https://tasks.google.com/task/${verifiedTask.id}`
-            });
+      // Signature verification (skip in test mode)
+      if (process.env.NODE_ENV !== 'test') {
+        const valid = verifySlackSignature(
+          rawBody,
+          req.headers,
+          process.env.SLACK_SIGNING_SECRET || ''
+        );
+        console.log(`[WEBHOOK] Signature valid: ${valid}`);
+        if (!valid) {
+          sendJson(res, 401, { error: 'Invalid signature' });
+          return;
         }
+      } else {
+        console.log('[WEBHOOK] Skipping signature verification (NODE_ENV=test)');
+      }
 
-    } catch (err) {
-        error('❌ Error in task creation flow', {
-            message: err.message,
-            stack: err.stack,
-            code: err.code
+      const { type, event, challenge } = body;
+      console.log(`[WEBHOOK] Event type: ${type}, event.type: ${event?.type}, item.type: ${event?.item?.type}`);
+
+      // url_verification challenge
+      if (type === 'url_verification') {
+        console.log('[WEBHOOK] Responding to url_verification challenge');
+        sendJson(res, 200, { challenge });
+        return;
+      }
+
+      // star_added message events — respond immediately, process in background
+      if (event && event.type === 'star_added' && event.item && event.item.type === 'message') {
+        console.log('[WEBHOOK] star_added message event detected — responding 200, enriching in background');
+        console.log('[WEBHOOK] Event item:', JSON.stringify(event.item, null, 2));
+        sendJson(res, 200, { ok: true });
+        taskEnricher.enrich(event).catch((err) => {
+          Sentry.captureException(err);
+          console.error('[ERROR] Background enrichment failed:', err.message);
         });
+        return;
+      }
+
+      console.log(`[WEBHOOK] Unhandled event type "${type}" / "${event?.type}" — responding 200`);
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      Sentry.captureException(err);
+      console.error('[ERROR] Unhandled error in webhook handler:', err.message);
+      sendJson(res, 500, { error: 'Internal server error' });
     }
-});
-
-// --- Export functions for testing ---
-module.exports = {
-    extractMessageData,
-    generateTaskTitle,
-    generateMessageLink,
-    verifyTaskCreated,
-    tasks
-};
-
-// --- Vercel serverless handler ---
-// Export for Vercel deployment (HTTP event delivery)
-if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-    // Vercel serverless function handler
-    // The app will handle incoming HTTP requests from Slack
-    module.exports = async (req, res) => {
-        // The Bolt app's built-in handler will process the request
-        await app.handler(req, res);
-    };
+  };
 }
 
-// --- Start App only if running directly (not in tests) ---
-if (require.main === module) {
-    (async () => {
-        await app.start();
-        console.log(`\n⚡ EmojiTasker is running!`);
-        console.log(`📌 Trigger: Star (save later) any Slack message`);
-        console.log(`🔍 Debug logging: ${process.env.LOG_LEVEL || 'INFO'}`);
-        console.log(`\nTip: Run with LOG_LEVEL=DEBUG for verbose output\n`);
-    })();
+const defaultHandler = createHandler(new Task_Enricher());
+
+// Build a shared Google Tasks API instance for legacy test compatibility
+const { google } = require('googleapis');
+const _oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET
+);
+_oauth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+const tasks = google.tasks({ version: 'v1', auth: _oauth2Client });
+
+async function verifyTaskCreated(taskId) {
+  try {
+    const response = await tasks.tasks.get({ tasklist: '@default', task: taskId });
+    return response.data;
+  } catch (err) {
+    console.error('Failed to verify task', err.message);
+    return null;
+  }
 }
+
+module.exports = defaultHandler;
+module.exports.createHandler = createHandler;
+module.exports.extractMessageData = extractMessageData;
+module.exports.generateTaskTitle = generateTaskTitle;
+module.exports.generateMessageLink = generateMessageLink;
+module.exports.tasks = tasks;
+module.exports.verifyTaskCreated = verifyTaskCreated;

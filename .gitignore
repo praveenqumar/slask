@@ -44,4 +44,22 @@ build/
 .cache/
 .temp/
 tmp/
-node_modules
+
+# Kiro IDE internals (not needed in repo)
+.kiro/
+
+# Claude Code internals
+.claude/
+
+# Agent rules (internal tooling)
+.agents/
+
+# npm cache (large, not needed)
+.npm-cache/
+
+# Unrelated installer script
+install.sh
+
+# Internal debugging notes
+DEBUGGING.md
+CLAUDE.md

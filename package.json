@@ -1,14 +1,17 @@
 {
-  "name": "slack-gtask-agent",
+  "name": "slask",
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
+    "@sentry/node": "^8.0.0",
     "@slack/bolt": "^3.21.0",
+    "axios": "^1.6.0",
     "dotenv": "^16.3.1",
     "googleapis": "^126.0.0",
     "open": "^11.0.0"
   },
   "devDependencies": {
+    "fast-check": "^3.15.0",
     "jest": "^29.7.0",
     "nock": "^13.5.6"
   },

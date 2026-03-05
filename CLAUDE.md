@@ -40,7 +40,7 @@ The user forgets important conversations in Slack and needs a way to move action
 ```
 Slack (messages)
     ↓  star_added event (trigger: save later)
-[THIS SERVICE] — slack-gtask-agent
+[THIS SERVICE] — slask
     ↓
 Google Tasks (task dump / management)
 ```
@@ -80,7 +80,7 @@ A simple Node.js bot that listens for starred Slack messages and automatically c
 ## Repository Structure
 
 ```
-/Volumes/SJPL/slack-gtask-agent/
+./
 ├── index.js              # Main entry point — Slack app + Google Tasks integration
 ├── slack-manifest.yaml   # Slack app configuration (manifest)
 ├── .env.example          # Environment variable template
@@ -122,7 +122,7 @@ User stars Slack message
         ↓
 Slack emits star_added event
         ↓
-[slack-gtask-agent] receives event via Socket Mode
+[slask] receives event via Socket Mode
         ↓
 Extracts message text + generates link
         ↓

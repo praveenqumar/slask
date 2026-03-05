@@ -1,167 +1,269 @@
-# slask
+# slask 🔖→ ✅
 
-> Automatically create Google Tasks when you star Slack messages
+> Click "Save for later" on a Slack message. Get a structured Google Task. Powered by AI.
 
-Slask (Slack + Tasks) is a simple Node.js bot that bridges Slack and Google Tasks. When you star a message in Slack ("save later" action), slask creates a corresponding Google Task with a link back to the original message.
+**slask** (Slack + Tasks) turns your "Save for later" bookmarks into actionable, AI-enriched Google Tasks — automatically. No copy-pasting, no context switching, no forgotten follow-ups.
 
-## Why?
+![slask in action](docs/demo.png)
 
-Actionable messages in Slack easily get lost. Slask moves them to a central task management system so you can actually follow up.
+---
+
+## The Problem
+
+You're deep in Slack. Someone shares something important — a bug report, a request, a deadline. You click the 🔖 "Save for later" bookmark to deal with it later.
+
+Later never comes.
+
+Saved messages pile up. Important things get buried. Tasks discussed in chat never make it to your task manager.
+
+## The Solution
+
+slask watches for "Save for later" bookmarks and does the heavy lifting:
+
+1. You click 🔖 **Save for later** on any Slack message
+2. slask sends it to an LLM
+3. The LLM extracts a structured task — title, description, bullet points, due date
+4. A clean Google Task appears in your list, with a link back to the original message
+
+No manual entry. No lost context. Just tasks that are actually actionable.
+
+---
 
 ## How It Works
 
 ```
-You star a Slack message
-        ↓
-Slack emits star_added event
-        ↓
-[slask] receives event via Socket Mode
-        ↓
-Creates Google Task (title + notes with link)
-        ↓
-Task stored in your default tasklist
+┌─────────────────────────────────────────────────────────────┐
+│                        SLACK                                │
+│   You click 🔖 "Save for later" on a message               │
+└──────────────────────────┬──────────────────────────────────┘
+                           │  star_added webhook event
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   WEBHOOK HANDLER                           │
+│   • Verifies Slack signature (HMAC-SHA256)                  │
+│   • Routes event to Task_Enricher                           │
+│   • Responds HTTP 200 immediately (no timeout)              │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     LLM AGENT                               │
+│   • Builds prompt with message text + link + current date   │
+│   • Calls GLM-4.7 (or any OpenAI-compatible API)            │
+│   • Parses + validates structured Enriched_Task JSON        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │  Enriched_Task
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 GOOGLE TASKS CLIENT                         │
+│   • Sets task title (+ "[Needs Clarification]" prefix)      │
+│   • Formats notes: description + bullets + message link     │
+│   • Sets due date in RFC 3339 if extracted by LLM           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    GOOGLE TASKS                             │
+│   ✅ Structured task in your default list                   │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## What You Get
+
+A raw Slack message like:
+
+> "tomorrow setup a call with sales team to discuss about how DeJoule new feature is shaping the BMS industry"
+
+Becomes a Google Task like:
+
+```
+Title:       Schedule sales call on DeJoule BMS feature
+Description: Set up a call with the sales team to discuss how DeJoule's
+             new feature is impacting the BMS industry.
+Bullets:     - Schedule the call for tomorrow
+             - Invite relevant sales team members
+             - Prepare talking points on DeJoule's new feature
+             - Discuss BMS industry impact
+Due:         2026-03-06
+Notes:       https://slack.com/archives/C123/p1234567890
+```
+
+---
 
 ## Features
 
-- **Simple trigger**: Just star a message in Slack
-- **Auto-link**: Each task includes a link back to the original Slack message
-- **Private**: Your stars are only visible to you
-- **Socket Mode**: No public HTTP server required
-- **Single user**: Personal task management (single Google account)
+- **AI-enriched tasks** — LLM extracts title, description, action items, and due dates from natural language
+- **Relative date resolution** — "tomorrow", "EOD", "next Monday" → absolute dates
+- **Needs clarification flag** — ambiguous messages get `[Needs Clarification]` prefix instead of being dropped
+- **Slack signature verification** — HMAC-SHA256 validates every request
+- **Vercel-ready** — serverless HTTP handler, no persistent connection needed
+- **Error monitoring** — Sentry captures all exceptions across the pipeline
+- **Fully testable** — constructor injection throughout, 68 tests, zero network calls in unit tests
+- **Provider-agnostic LLM** — swap providers with a single env var change
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js |
+| Webhook | Native HTTP (Vercel serverless compatible) |
+| Slack integration | Events API (HTTP webhook) |
+| LLM | GLM-4.7 via z.ai (any OpenAI-compatible API) |
+| Google integration | googleapis (OAuth2) |
+| Error monitoring | Sentry |
+| Testing | Jest + fast-check (property-based) |
+
+---
 
 ## Prerequisites
 
-- Node.js (v18+ recommended)
-- Google Cloud project with Tasks API enabled
-- Slack app configured with Socket Mode
+- Node.js v18+
+- A [Slack app](https://api.slack.com/apps) with Events API enabled
+- A [Google Cloud project](https://console.cloud.google.com) with Tasks API enabled
+- An LLM API key (z.ai / ZhipuAI / OpenAI / any OpenAI-compatible)
+- A [Sentry](https://sentry.io) project (optional but recommended)
+
+---
 
 ## Installation
 
 ```bash
-git clone <your-repo>/slask.git
+git clone https://github.com/praveenqumar/slask.git
 cd slask
 npm install
-```
-
-## Setup
-
-### 1. Slack App
-
-1. Create a new Slack app at [api.slack.com/apps](https://api.slack.com/apps)
-2. Enable **Socket Mode**
-3. Add bot scopes:
-   - `channels:history`
-   - `groups:history`
-   - `im:history`
-   - `mpim:history`
-4. Add user scope:
-   - `stars:read`
-5. Subscribe to event: `star_added`
-6. Install the app and save:
-   - Bot Token (`xoxb-*`)
-   - App Token (`xapp-*`)
-   - Signing Secret
-
-### 2. Google Cloud Project
-
-1. Create a project at [console.cloud.google.com](https://console.cloud.google.com)
-2. Enable **Tasks API**
-3. Create OAuth 2.0 credentials:
-   - Application type: Web application
-   - Authorized redirect URI: `http://localhost:3000/callback`
-
-### 3. Generate Google Refresh Token
-
-```bash
 cp .env.example .env
-# Fill in your Slack tokens and Google Client ID/Secret
-node scripts/auth.js
 ```
 
-Follow the authorization prompt and copy the `refresh_token` to your `.env` file.
+---
 
-### 4. Environment Variables
+## Configuration
 
-Create a `.env` file with:
+### 1. Environment Variables
+
+Fill in `.env`:
 
 ```env
+# Slack
 SLACK_SIGNING_SECRET=your_signing_secret
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_APP_TOKEN=xapp-your-app-token
-SLACK_USER_TOKEN=xoxp-your-user-token
+
+# Google
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 GOOGLE_REFRESH_TOKEN=your_refresh_token
-TRIGGER_EMOJI=white_check_mark
-LOG_LEVEL=INFO
+
+# LLM (defaults to ZhipuAI GLM-4.7 via z.ai)
+LLM_API_KEY=your_llm_api_key
+LLM_API_BASE_URL=https://api.z.ai/api/paas/v4/chat/completions
+LLM_MODEL=glm-4.7
+
+# Sentry (optional)
+SENTRY_DSN=https://...@sentry.io/...
 ```
 
-## Usage
+To use OpenAI instead, just swap:
+```env
+LLM_API_BASE_URL=https://api.openai.com/v1/chat/completions
+LLM_MODEL=gpt-4o-mini
+LLM_API_KEY=sk-...
+```
 
-Start the bot:
+### 2. Google Refresh Token (one-time setup)
 
 ```bash
-npm start
+node scripts/auth.js
 ```
 
-Or for development with auto-reload:
+Follow the browser prompt, then copy the printed `refresh_token` into your `.env`.
+
+### 3. Slack App Setup
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → create or select your app
+2. **Event Subscriptions** → enable → set Request URL to your server URL
+3. **Subscribe to events on behalf of users** → add `star_added`
+4. **Install App** → reinstall to apply changes
+5. Copy **Signing Secret** from Basic Information → App Credentials
+
+---
+
+## Running Locally
 
 ```bash
-npm run dev
+# Start the server
+node server.js
+
+# In another terminal, expose via ngrok
+npx ngrok http 3000
 ```
 
-Now star any message in Slack and check your Google Tasks!
+Set the ngrok `https://` URL as your Slack Event Subscriptions Request URL. Slack will verify it automatically.
+
+To skip signature verification during local testing:
+
+```bash
+NODE_ENV=test node server.js
+```
+
+---
+
+## Deploying to Vercel
+
+```bash
+vercel --prod
+```
+
+Set all `.env` variables in Vercel dashboard → Settings → Environment Variables.
+
+`index.js` exports a standard `(req, res)` handler — no changes needed for Vercel.
+
+---
 
 ## Testing
 
 ```bash
-# Run all tests
+# Unit tests (no network)
+npx jest --testPathPattern=tests/unit --runInBand
+
+# Integration tests
+npx jest --testPathPattern=tests/integration --runInBand
+
+# All tests
 npm test
 
-# Run unit tests only
-npm test -- tests/unit/
-
-# Run integration tests only
-npm test -- tests/integration/
-
-# Run with coverage
-npm test -- --coverage
+# Smoke test your LLM connection
+node scripts/test-llm.js
 ```
 
-## Manual Testing
+---
 
-Simulate a star event without using Slack:
+## Project Structure
 
-```bash
-node test-star-event.js
+```
+slask/
+├── index.js                          # Webhook handler + Vercel entry point
+├── server.js                         # Local HTTP server for development
+├── lib/
+│   ├── llm-agent.js                  # LLM enrichment (injectable HTTP client)
+│   ├── google-tasks-client.js        # Google Tasks API (injectable)
+│   ├── task-enricher.js              # Orchestrates LLM → Google Tasks
+│   ├── sentry.js                     # Error monitoring
+│   └── logger.js                     # Logging utility
+├── scripts/
+│   ├── auth.js                       # Google OAuth2 token generator
+│   └── test-llm.js                   # LLM smoke test
+├── tests/
+│   ├── unit/                         # Jest unit tests (mocked dependencies)
+│   └── integration/                  # Integration tests
+├── docs/
+│   └── demo.png                      # Screenshot
+├── .env.example                      # Environment variable template
+└── vercel.json                       # Vercel routing config
 ```
 
-Requires `SLACK_USER_ID` in `.env`.
-
-## Troubleshooting
-
-Set `LOG_LEVEL=DEBUG` for verbose output:
-
-```env
-LOG_LEVEL=DEBUG
-```
-
-See [DEBUGGING.md](DEBUGGING.md) for detailed debugging steps.
-
-## Limitations
-
-- **Single user**: Currently supports one Google account. Multiple users would require per-user OAuth storage.
-- **No notification**: The bot doesn't confirm task creation in Slack. Check console logs.
-- **Default tasklist**: Tasks go to `@default` tasklist only.
-- **No retry**: If Google Tasks API fails, the task is lost.
-
-## Tech Stack
-
-- Node.js
-- [Slack Bolt](https://slack.dev/bolt-js/) — Slack SDK
-- [Google APIs](https://github.com/googleapis/google-api-nodejs-client) — Google Tasks API
-- Socket Mode — WebSocket connection to Slack
+---
 
 ## License
 

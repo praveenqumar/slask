@@ -1,4 +1,4 @@
-# Debugging Strategy for slack-gtask-agent
+# Debugging Strategy for slask
 
 ## Context
 
@@ -6,7 +6,7 @@ The user is experiencing an issue where starring a Slack message (clicking "save
 
 ## Critical Files
 
-- `/Volumes/SJPL/slack-gtask-agent/index.js` - Main entry point containing the star_added event handler
+- `./index.js` - Main entry point containing the star_added event handler
 
 ## Implementation Plan
 
