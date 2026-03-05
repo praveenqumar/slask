@@ -71,6 +71,12 @@ function sendJson(res, statusCode, body) {
 function createHandler(taskEnricher) {
   return async function handler(req, res) {
     console.log(`[WEBHOOK] Incoming request: ${req.method} ${req.url}`);
+
+    // Ignore non-POST requests (browser hits, favicon, etc.)
+    if (req.method !== 'POST') {
+      sendJson(res, 200, { ok: true, service: 'slask' });
+      return;
+    }
     try {
       // Collect raw body
       const rawBody = await new Promise((resolve, reject) => {
