@@ -67,6 +67,8 @@ function sendJson(res, statusCode, body) {
   }
 }
 
+
+
 // --- Handler factory ---
 function createHandler(taskEnricher) {
   return async function handler(req, res) {
@@ -111,6 +113,14 @@ function createHandler(taskEnricher) {
         }
       } else {
         console.log('[WEBHOOK] Skipping signature verification (NODE_ENV=test)');
+      }
+
+      // Ignore Slack retries — they cause duplicate task creation
+      const retryNum = req.headers['x-slack-retry-num'];
+      if (retryNum) {
+        console.log(`[WEBHOOK] Slack retry #${retryNum} — ignoring to prevent duplicates`);
+        sendJson(res, 200, { ok: true });
+        return;
       }
 
       const { type, event, challenge } = body;
